@@ -296,12 +296,75 @@ async function fetchWithTimeout(url, opts, ms){
     clearTimeout(timer);
   }
 }
+/* ---------- Firebase RTDB rehydration ----------
+   Firebase silently drops any field that is null or an empty array/object,
+   and turns a sparse array (nulls in the middle, e.g. bracket "bye" slots)
+   into a plain object instead of an array. normalizeState() repairs all of
+   that after every load/poll so the rest of the app can rely on a stable shape. */
+function toArray(value, expectedLength){
+  if(Array.isArray(value)) return value;
+  if(value && typeof value === 'object'){
+    const keys = Object.keys(value).map(k=>parseInt(k,10)).filter(n=>!isNaN(n));
+    const maxIdx = keys.length ? Math.max(...keys) : -1;
+    const len = (expectedLength!=null) ? Math.max(expectedLength, maxIdx+1) : maxIdx+1;
+    const arr = [];
+    for(let i=0;i<len;i++) arr.push(value[i] !== undefined ? value[i] : null);
+    return arr;
+  }
+  return [];
+}
+function normalizeMatch(m){
+  if(!m) return m;
+  m.sets = toArray(m.sets).map(s => ({
+    a: (s && s.a !== undefined) ? s.a : null,
+    b: (s && s.b !== undefined) ? s.b : null
+  }));
+  if(m.team1Id === undefined) m.team1Id = null;
+  if(m.team2Id === undefined) m.team2Id = null;
+  if(m.winnerId === undefined) m.winnerId = null;
+  if(m.doneAt === undefined) m.doneAt = null;
+  if(m.nextMatchId === undefined) m.nextMatchId = null;
+  if(m.nextSlotSide === undefined) m.nextSlotSide = null;
+  return m;
+}
+function normalizeCategory(c){
+  c.config = (c.config && typeof c.config === 'object') ? c.config : {};
+  if(c.config.advancePerGroup == null) c.config.advancePerGroup = 2;
+  if(c.config.groupSets == null) c.config.groupSets = 2;
+  c.groups = toArray(c.groups).map(g=>{
+    g.teamIds = toArray(g.teamIds);
+    return g;
+  });
+  c.teamNames = (c.teamNames && typeof c.teamNames === 'object') ? c.teamNames : {};
+  c.matches = toArray(c.matches).map(normalizeMatch);
+  if(c.bracket && typeof c.bracket === 'object'){
+    c.bracket.roundNames = toArray(c.bracket.roundNames);
+  } else {
+    c.bracket = null;
+  }
+  if(c.bracketSetup && typeof c.bracketSetup === 'object'){
+    c.bracketSetup.slots = toArray(c.bracketSetup.slots, c.bracketSetup.size);
+  } else {
+    c.bracketSetup = null;
+  }
+  return c;
+}
+function normalizeState(state){
+  if(!state || typeof state !== 'object') return null;
+  state.eventName = state.eventName || 'แบดมินตัน หน้าทอน เกาะสมุย';
+  state.categories = toArray(state.categories).map(normalizeCategory);
+  if(state.activeCategoryId === undefined) state.activeCategoryId = null;
+  if(state.catSeq === undefined) state.catSeq = state.categories.length;
+  if(state.updatedAt === undefined) state.updatedAt = Date.now();
+  return state;
+}
+
 async function loadState(){
   try{
     const res = await fetchWithTimeout(`${FIREBASE_DB_URL}/${STATE_PATH}.json`, {}, 8000);
     if(!res.ok) return null;
     const data = await res.json();
-    return data || null;
+    return data ? normalizeState(data) : null;
   }catch(e){ console.error('load failed', e); return null; }
 }
 async function saveState(){
@@ -328,7 +391,7 @@ async function pollRemote(){
     if(!res.ok) return;
     const remote = await res.json();
     if(remote && remote.updatedAt !== appState.updatedAt){
-      appState = remote;
+      appState = normalizeState(remote);
       render();
     }
   }catch(e){ /* ignore transient network errors */ }
