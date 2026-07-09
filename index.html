@@ -710,6 +710,12 @@ function generateGroupFixtures(){
 
 /* ---------- knockout: manual bracket setup ---------- */
 function suggestedQualifiers(cat){
+  /* Every rank tier (1st place of each group, then 2nd place of each group, etc.)
+     is kept in natural group order. Combined with the standard bracket seed
+     order, this guarantees round 1 always pairs teams from DIFFERENT groups,
+     and a group's rank-1 team always meets another group's LAST qualifying
+     rank (e.g. with top-2 advancing: 1st place meets a 2nd place from another
+     group; never its own group's 2nd place). */
   const advance = cat.config.advancePerGroup;
   const groups = cat.groups;
   const standingsByGroup = {};
@@ -717,7 +723,6 @@ function suggestedQualifiers(cat){
   let list = [];
   for(let rank=0; rank<advance; rank++){
     let rankTeams = groups.map(g=> standingsByGroup[g.id][rank] ? standingsByGroup[g.id][rank].teamId : null).filter(Boolean);
-    if(rank % 2 === 1) rankTeams.reverse();
     list.push(...rankTeams);
   }
   return list;
