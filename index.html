@@ -417,7 +417,35 @@ function mergeStates(remote, local){
   return merged;
 }
 
-async function saveState(){
+async function saveStateDirect(){
+  /* Plain overwrite — used for structural/admin actions (categories, setup,
+     bracket setup, fixture generation). These can legitimately DELETE things
+     (a category, a group, a match set), and a merge would wrongly resurrect
+     whatever was deleted by pulling it back in from the stale remote copy.
+     These actions are low-frequency / effectively single-operator, so the
+     concurrency risk here is much lower than live score entry. */
+  appState.updatedAt = Date.now();
+  render();
+  const fresh = await ensureFreshToken();
+  try{
+    const url = `${FIREBASE_DB_URL}/${STATE_PATH}.json` + (fresh && auth.idToken ? `?auth=${auth.idToken}` : '');
+    const res = await fetchWithTimeout(url, {
+      method:'PUT',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(appState)
+    }, 8000);
+    if(!res.ok){
+      alert('บันทึกไม่สำเร็จ — อาจยังไม่ได้เข้าสู่ระบบทีมงาน หรือสิทธิ์หมดอายุ กรุณาเข้าสู่ระบบใหม่');
+      const remote = await loadState();
+      if(remote){ appState = remote; render(); }
+    }
+  }catch(e){ console.error('save failed', e); }
+}
+async function saveStateMerged(){
+  /* Match-level merge — used ONLY for score entry, where many staff on
+     different courts genuinely save at the same time. Never deletes matches,
+     only updates fields on existing ones, so the union-merge in mergeMatches
+     is always safe here. */
   appState.updatedAt = Date.now();
   render();
   const fresh = await ensureFreshToken();
@@ -468,7 +496,7 @@ function createCategory(name){
   appState.activeCategoryId = id;
   ui.tab = 'setup';
   ui.scoreEntryMatchId = null;
-  saveState();
+  saveStateDirect();
 }
 function handleCreateCategory(){
   const el = document.getElementById('new-cat-name');
@@ -478,7 +506,7 @@ function handleCreateCategory(){
 function renameCategory(id, name){
   const c = appState.categories.find(x=>x.id===id);
   if(c) c.name = name || c.name;
-  saveState();
+  saveStateDirect();
 }
 function deleteCategory(id){
   if(!confirm('ลบประเภทนี้ทั้งหมด รวมถึงกลุ่ม ทีม และผลการแข่งขันที่บันทึกไว้? การลบนี้ย้อนกลับไม่ได้')) return;
@@ -486,15 +514,15 @@ function deleteCategory(id){
   if(appState.activeCategoryId===id){
     appState.activeCategoryId = appState.categories.length ? appState.categories[0].id : null;
   }
-  saveState();
+  saveStateDirect();
 }
 function switchCategory(id){
   appState.activeCategoryId = id;
   ui.scoreEntryMatchId = null;
   ui.bigScreenIndex = 0;
-  saveState();
+  saveStateDirect();
 }
-function setEventName(name){ appState.eventName = name; saveState(); }
+function setEventName(name){ appState.eventName = name; saveStateDirect(); }
 
 /* ---------- pure helpers (take cat explicitly) ---------- */
 function getTeamName(cat, tid){ return (cat && cat.teamNames[tid]) || tid || '-'; }
@@ -609,7 +637,7 @@ function addGroup(){
     cat.teamNames[tid] = `ทีม ${id}${i}`;
   }
   cat.groups.push({id, teamIds});
-  saveState();
+  saveStateDirect();
 }
 function removeGroup(gid){
   const cat = activeCat(); if(!cat) return;
@@ -618,7 +646,7 @@ function removeGroup(gid){
   g.teamIds.forEach(tid=> delete cat.teamNames[tid]);
   cat.groups = cat.groups.filter(x=>x.id!==gid);
   cat.matches = cat.matches.filter(m=> !(m.stage==='group' && m.groupId===gid));
-  saveState();
+  saveStateDirect();
 }
 function addTeam(gid){
   const cat = activeCat(); if(!cat) return;
@@ -627,7 +655,7 @@ function addTeam(gid){
   const tid = gid+idx;
   g.teamIds.push(tid);
   cat.teamNames[tid] = `ทีม ${gid}${idx}`;
-  saveState();
+  saveStateDirect();
 }
 function removeTeam(gid, tid){
   const cat = activeCat(); if(!cat) return;
@@ -635,22 +663,22 @@ function removeTeam(gid, tid){
   if(g.teamIds.length <= 2){ alert('แต่ละกลุ่มต้องมีอย่างน้อย 2 ทีม'); return; }
   g.teamIds = g.teamIds.filter(x=>x!==tid);
   delete cat.teamNames[tid];
-  saveState();
+  saveStateDirect();
 }
 function renameTeam(tid, name){
   const cat = activeCat(); if(!cat) return;
   cat.teamNames[tid] = name || tid;
-  saveState();
+  saveStateDirect();
 }
 function setAdvancePerGroup(n){
   const cat = activeCat(); if(!cat) return;
   cat.config.advancePerGroup = Math.max(1, parseInt(n)||1);
-  saveState();
+  saveStateDirect();
 }
 function setGroupSets(n){
   const cat = activeCat(); if(!cat) return;
   cat.config.groupSets = Math.max(1, parseInt(n)||2);
-  saveState();
+  saveStateDirect();
 }
 
 function generateGroupFixtures(){
@@ -677,7 +705,7 @@ function generateGroupFixtures(){
   cat.matches = newMatches;
   cat.bracket = null;
   cat.bracketSetup = null;
-  saveState();
+  saveStateDirect();
 }
 
 /* ---------- knockout: manual bracket setup ---------- */
@@ -727,13 +755,13 @@ function setBracketSize(newSize){
   const slots = new Array(newSize).fill(null);
   for(let i=0;i<Math.min(newSize, draft.slots.length); i++) slots[i] = draft.slots[i];
   cat.bracketSetup = {size:newSize, slots};
-  saveState();
+  saveStateDirect();
 }
 function setSlotTeam(idx, teamId){
   const cat = activeCat(); if(!cat) return;
   const draft = ensureDraft(cat);
   draft.slots[idx] = teamId || null;
-  saveState();
+  saveStateDirect();
 }
 function autoFillBracket(){
   const cat = activeCat(); if(!cat) return;
@@ -743,13 +771,13 @@ function autoFillBracket(){
   const ord = seedOrder(draft.size);
   ord.forEach((seed,i)=>{ slots[i] = qualifiers[seed-1] || null; });
   cat.bracketSetup = {size:draft.size, slots};
-  saveState();
+  saveStateDirect();
 }
 function clearBracketSlots(){
   const cat = activeCat(); if(!cat) return;
   const draft = ensureDraft(cat);
   cat.bracketSetup = {size:draft.size, slots:new Array(draft.size).fill(null)};
-  saveState();
+  saveStateDirect();
 }
 function propagateWinner(cat, match){
   if(!match.nextMatchId) return;
@@ -813,7 +841,7 @@ function confirmBracketSetup(){
   cat.matches = cat.matches.filter(m=>m.stage==='group').concat(matches);
   cat.bracket = {size, roundNames, generated:true};
   resolveByesInPlace(cat);
-  saveState();
+  saveStateDirect();
 }
 function editBracket(){
   const cat = activeCat(); if(!cat) return;
@@ -829,7 +857,7 @@ function editBracket(){
   cat.bracket = null;
   cat.bracketSetup = {size, slots};
   cat.matches = cat.matches.filter(m=>m.stage!=='knockout');
-  saveState();
+  saveStateDirect();
 }
 
 /* ---------- score submission ---------- */
@@ -852,7 +880,7 @@ function submitGroupScore(matchId, setsVals){
   match.doneAt = Date.now();
   match.updatedAt = Date.now();
   ui.scoreEntryMatchId = null;
-  saveState();
+  saveStateMerged();
 }
 function submitKnockoutScore(matchId, setsVals){
   const cat = activeCat(); if(!cat) return;
@@ -874,7 +902,7 @@ function submitKnockoutScore(matchId, setsVals){
     match.winnerId = null;
   }
   ui.scoreEntryMatchId = null;
-  saveState();
+  saveStateMerged();
 }
 
 /* ---------- render: shell ---------- */
