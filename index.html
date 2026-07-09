@@ -325,6 +325,7 @@ function normalizeMatch(m){
   if(m.doneAt === undefined) m.doneAt = null;
   if(m.nextMatchId === undefined) m.nextMatchId = null;
   if(m.nextSlotSide === undefined) m.nextSlotSide = null;
+  if(m.updatedAt === undefined) m.updatedAt = m.doneAt || 0;
   return m;
 }
 function normalizeCategory(c){
@@ -367,21 +368,76 @@ async function loadState(){
     return data ? normalizeState(data) : null;
   }catch(e){ console.error('load failed', e); return null; }
 }
+/* ---------- merge-before-write (protects concurrent staff edits) ----------
+   Multiple staff can be entering scores for different matches at the same
+   moment. Since writes replace the whole JSON blob, we fetch the freshest
+   remote copy right before saving and merge our local change into it at the
+   match level (newest updatedAt per match id wins) instead of blindly
+   clobbering whatever anyone else just saved. */
+function mergeMatches(remoteMatches, localMatches){
+  const byId = {};
+  (remoteMatches||[]).forEach(m=>{ byId[m.id] = m; });
+  (localMatches||[]).forEach(lm=>{
+    const rm = byId[lm.id];
+    if(!rm){ byId[lm.id] = lm; return; }
+    const rmTime = rm.updatedAt || rm.doneAt || 0;
+    const lmTime = lm.updatedAt || lm.doneAt || 0;
+    byId[lm.id] = (lmTime >= rmTime) ? lm : rm;
+  });
+  return Object.values(byId);
+}
+function mergeCategory(remoteCat, localCat){
+  const merged = JSON.parse(JSON.stringify(remoteCat));
+  merged.name = localCat.name;
+  merged.config = localCat.config;
+  merged.groups = localCat.groups;
+  merged.teamNames = localCat.teamNames;
+  merged.bracket = localCat.bracket;
+  merged.bracketSetup = localCat.bracketSetup;
+  merged.matches = mergeMatches(remoteCat.matches, localCat.matches);
+  return merged;
+}
+function mergeStates(remote, local){
+  const merged = JSON.parse(JSON.stringify(remote));
+  merged.eventName = local.eventName;
+  merged.activeCategoryId = local.activeCategoryId;
+  merged.catSeq = Math.max(remote.catSeq||0, local.catSeq||0);
+  const remoteById = {};
+  merged.categories.forEach(c=>{ remoteById[c.id]=c; });
+  const mergedCats = [];
+  const seen = new Set();
+  local.categories.forEach(localCat=>{
+    const remoteCat = remoteById[localCat.id];
+    mergedCats.push(remoteCat ? mergeCategory(remoteCat, localCat) : localCat);
+    seen.add(localCat.id);
+  });
+  // keep categories that exist remotely but not locally (created by someone else meanwhile)
+  merged.categories.forEach(c=>{ if(!seen.has(c.id)) mergedCats.push(c); });
+  merged.categories = mergedCats;
+  return merged;
+}
+
 async function saveState(){
   appState.updatedAt = Date.now();
   render();
   const fresh = await ensureFreshToken();
   try{
+    const remote = await loadState();
+    const toWrite = remote ? mergeStates(remote, appState) : appState;
+    toWrite.updatedAt = Date.now();
     const url = `${FIREBASE_DB_URL}/${STATE_PATH}.json` + (fresh && auth.idToken ? `?auth=${auth.idToken}` : '');
     const res = await fetchWithTimeout(url, {
       method:'PUT',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(appState)
+      body: JSON.stringify(toWrite)
     }, 8000);
-    if(!res.ok){
+    if(res.ok){
+      appState = toWrite;
+      render();
+    } else {
       alert('บันทึกไม่สำเร็จ — อาจยังไม่ได้เข้าสู่ระบบทีมงาน หรือสิทธิ์หมดอายุ กรุณาเข้าสู่ระบบใหม่');
-      const remote = await loadState();
-      if(remote){ appState = remote; render(); }
+      const remote2 = await loadState();
+      if(remote2){ appState = remote2; render(); }
     }
   }catch(e){ console.error('save failed', e); }
 }
@@ -613,7 +669,7 @@ function generateGroupFixtures(){
           stage:'group', groupId:g.id, round:ridx+1,
           team1Id:pair[0], team2Id:pair[1],
           sets: Array.from({length: cat.config.groupSets}, ()=>({a:null,b:null})),
-          status:'pending', winnerId:null, doneAt:null
+          status:'pending', winnerId:null, doneAt:null, updatedAt:Date.now()
         });
       });
     });
@@ -700,6 +756,7 @@ function propagateWinner(cat, match){
   const next = findMatch(cat, match.nextMatchId);
   if(!next) return;
   if(match.nextSlotSide==='team1') next.team1Id = match.winnerId; else next.team2Id = match.winnerId;
+  next.updatedAt = Date.now();
 }
 function resolveByesInPlace(cat){
   const firstRoundName = cat.bracket.roundNames[0];
@@ -709,7 +766,7 @@ function resolveByesInPlace(cat){
     cat.matches.filter(m=>m.stage==='knockout' && m.round===firstRoundName && m.status==='pending').forEach(m=>{
       const hasT1 = !!m.team1Id, hasT2 = !!m.team2Id;
       if(hasT1 !== hasT2){
-        m.status='done'; m.winnerId = hasT1 ? m.team1Id : m.team2Id; m.doneAt = Date.now(); m.sets = [];
+        m.status='done'; m.winnerId = hasT1 ? m.team1Id : m.team2Id; m.doneAt = Date.now(); m.updatedAt = Date.now(); m.sets = [];
         propagateWinner(cat, m);
         changed = true;
       }
@@ -737,7 +794,7 @@ function confirmBracketSetup(){
         id:`KO-${roundName}-${s+1}`, stage:'knockout', round:roundName, slot:s+1,
         team1Id: ri===0 ? slots[s*2] : null,
         team2Id: ri===0 ? slots[s*2+1] : null,
-        sets:[], status:'pending', winnerId:null, doneAt:null,
+        sets:[], status:'pending', winnerId:null, doneAt:null, updatedAt:Date.now(),
         nextMatchId:null, nextSlotSide:null
       });
     }
@@ -793,6 +850,7 @@ function submitGroupScore(matchId, setsVals){
   match.winnerId = winner;
   match.status = winner ? 'done' : 'tie';
   match.doneAt = Date.now();
+  match.updatedAt = Date.now();
   ui.scoreEntryMatchId = null;
   saveState();
 }
@@ -804,6 +862,7 @@ function submitKnockoutScore(matchId, setsVals){
   let w1=0,w2=0;
   sets.forEach(s=>{ if(Number(s.a)>Number(s.b)) w1++; else if(Number(s.b)>Number(s.a)) w2++; });
   match.sets = sets;
+  match.updatedAt = Date.now();
   if(w1>=2 || w2>=2){
     match.status = 'done';
     match.winnerId = w1>=2 ? match.team1Id : match.team2Id;
