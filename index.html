@@ -187,10 +187,10 @@ function requireLoginNotice(){
 
 async function login(email, password){
   try{
-    const res = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${FIREBASE_API_KEY}`, {
+    const res = await fetchWithTimeout(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${FIREBASE_API_KEY}`, {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({email, password, returnSecureToken:true})
-    });
+    }, 10000);
     const data = await res.json();
     if(!res.ok){
       alert('เข้าสู่ระบบไม่สำเร็จ: ' + ((data.error && data.error.message) || 'กรุณาตรวจสอบอีเมล/รหัสผ่าน'));
@@ -215,10 +215,10 @@ function logout(){
 async function refreshIdToken(){
   if(!auth.refreshToken) return false;
   try{
-    const res = await fetch(`https://securetoken.googleapis.com/v1/token?key=${FIREBASE_API_KEY}`, {
+    const res = await fetchWithTimeout(`https://securetoken.googleapis.com/v1/token?key=${FIREBASE_API_KEY}`, {
       method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'},
       body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(auth.refreshToken)}`
-    });
+    }, 8000);
     const data = await res.json();
     if(!res.ok) return false;
     auth.idToken = data.id_token;
@@ -287,9 +287,18 @@ function defaultState(){
   };
 }
 
+async function fetchWithTimeout(url, opts, ms){
+  const controller = new AbortController();
+  const timer = setTimeout(()=>controller.abort(), ms || 8000);
+  try{
+    return await fetch(url, Object.assign({}, opts, {signal: controller.signal}));
+  } finally {
+    clearTimeout(timer);
+  }
+}
 async function loadState(){
   try{
-    const res = await fetch(`${FIREBASE_DB_URL}/${STATE_PATH}.json`);
+    const res = await fetchWithTimeout(`${FIREBASE_DB_URL}/${STATE_PATH}.json`, {}, 8000);
     if(!res.ok) return null;
     const data = await res.json();
     return data || null;
@@ -301,11 +310,11 @@ async function saveState(){
   const fresh = await ensureFreshToken();
   try{
     const url = `${FIREBASE_DB_URL}/${STATE_PATH}.json` + (fresh && auth.idToken ? `?auth=${auth.idToken}` : '');
-    const res = await fetch(url, {
+    const res = await fetchWithTimeout(url, {
       method:'PUT',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify(appState)
-    });
+    }, 8000);
     if(!res.ok){
       alert('บันทึกไม่สำเร็จ — อาจยังไม่ได้เข้าสู่ระบบทีมงาน หรือสิทธิ์หมดอายุ กรุณาเข้าสู่ระบบใหม่');
       const remote = await loadState();
@@ -315,7 +324,7 @@ async function saveState(){
 }
 async function pollRemote(){
   try{
-    const res = await fetch(`${FIREBASE_DB_URL}/${STATE_PATH}.json`);
+    const res = await fetchWithTimeout(`${FIREBASE_DB_URL}/${STATE_PATH}.json`, {}, 8000);
     if(!res.ok) return;
     const remote = await res.json();
     if(remote && remote.updatedAt !== appState.updatedAt){
@@ -1379,19 +1388,24 @@ function renderBSLive(cat){
 
 /* ---------- init ---------- */
 (async function init(){
-  await restoreSession();
-  const loaded = await loadState();
-  appState = loaded || defaultState();
-  if(!loaded){
-    try{
-      await fetch(`${FIREBASE_DB_URL}/${STATE_PATH}.json`, {
-        method:'PUT',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify(appState)
-      });
-    }catch(e){}
+  try{
+    await restoreSession();
+    const loaded = await loadState();
+    appState = (loaded && Array.isArray(loaded.categories)) ? loaded : defaultState();
+    if(!loaded){
+      try{
+        await fetchWithTimeout(`${FIREBASE_DB_URL}/${STATE_PATH}.json`, {
+          method:'PUT',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify(appState)
+        }, 8000);
+      }catch(e){}
+    }
+    if(!appState.activeCategoryId && appState.categories.length) appState.activeCategoryId = appState.categories[0].id;
+  }catch(e){
+    console.error('เริ่มต้นแอปไม่สำเร็จ ใช้ข้อมูลเริ่มต้นแทน (จะไม่ซิงก์จนกว่าจะเชื่อมต่อได้)', e);
   }
-  if(!appState.activeCategoryId && appState.categories.length) appState.activeCategoryId = appState.categories[0].id;
+  if(!appState) appState = defaultState();
   render();
   setInterval(pollRemote, 4000);
   setInterval(bsTick, 9000);
