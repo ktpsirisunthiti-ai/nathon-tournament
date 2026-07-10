@@ -570,8 +570,11 @@ function computeStandings(cat, groupId){
     table[m.team1Id].played++; table[m.team2Id].played++;
     table[m.team1Id].pf += r.pts1; table[m.team1Id].pa += r.pts2;
     table[m.team2Id].pf += r.pts2; table[m.team2Id].pa += r.pts1;
-    if(m.winnerId === m.team1Id){ table[m.team1Id].win++; table[m.team1Id].pts += 1; table[m.team2Id].loss++; }
-    else if(m.winnerId === m.team2Id){ table[m.team2Id].win++; table[m.team2Id].pts += 1; table[m.team1Id].loss++; }
+    // points come directly from sets won: win 1 set = 1 point, win 2 sets = 2 points, etc.
+    table[m.team1Id].pts += r.sets1;
+    table[m.team2Id].pts += r.sets2;
+    if(m.winnerId === m.team1Id){ table[m.team1Id].win++; table[m.team2Id].loss++; }
+    else if(m.winnerId === m.team2Id){ table[m.team2Id].win++; table[m.team1Id].loss++; }
   });
   const arr = Object.values(table);
   arr.forEach(t=> t.diff = t.pf - t.pa);
@@ -875,13 +878,15 @@ function submitGroupScore(matchId, setsVals){
   }
   match.sets = setsVals;
   const r = groupMatchResult(match);
+  // points come directly from sets won (see computeStandings), so a split
+  // result like 1-1 is a normal completed match, not an unresolved tie —
+  // winnerId here is purely informational (who took more sets), and can be
+  // null if the sets were split evenly.
   let winner = null;
   if(r.sets1 > r.sets2) winner = match.team1Id;
   else if(r.sets2 > r.sets1) winner = match.team2Id;
-  else if(r.pts1 > r.pts2) winner = match.team1Id;
-  else if(r.pts2 > r.pts1) winner = match.team2Id;
   match.winnerId = winner;
-  match.status = winner ? 'done' : 'tie';
+  match.status = 'done';
   match.doneAt = Date.now();
   match.updatedAt = Date.now();
   ui.scoreEntryMatchId = null;
@@ -1077,7 +1082,7 @@ function renderSetup(){
 
   <div class="card">
     <h2>สร้างตารางแข่ง</h2>
-    <p class="note">กดปุ่มนี้เพื่อสร้างตารางพบกันหมดของทุกกลุ่มตามรายชื่อทีมด้านบน (แข่ง ${cat.config.groupSets} เซตต่อคู่ ชนะได้ 1 แต้ม แพ้ได้ 0 แต้ม ตัดเสมอด้วยแต้มได้เสีย)</p>
+    <p class="note">กดปุ่มนี้เพื่อสร้างตารางพบกันหมดของทุกกลุ่มตามรายชื่อทีมด้านบน (แข่ง ${cat.config.groupSets} เซตต่อคู่ นับแต้มจากเซตที่ชนะโดยตรง ชนะ 1 เซตได้ 1 แต้ม ชนะ 2 เซตได้ 2 แต้ม สะสมแต้มตลอดรอบแบ่งกลุ่ม ตัดเสมอด้วยคะแนนได้-เสีย)</p>
     <button class="btn primary" onclick="generateGroupFixtures()">สร้าง / รีเซ็ตตารางแข่งรอบแบ่งกลุ่ม</button>
   </div>
   `;
