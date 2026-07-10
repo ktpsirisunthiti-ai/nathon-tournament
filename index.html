@@ -571,10 +571,13 @@ function computeStandings(cat, groupId){
     table[m.team1Id].pf += r.pts1; table[m.team1Id].pa += r.pts2;
     table[m.team2Id].pf += r.pts2; table[m.team2Id].pa += r.pts1;
     // points come directly from sets won: win 1 set = 1 point, win 2 sets = 2 points, etc.
+    // "ชนะ"/"แพ้" are counted the same way — by sets, not by match outcome.
     table[m.team1Id].pts += r.sets1;
     table[m.team2Id].pts += r.sets2;
-    if(m.winnerId === m.team1Id){ table[m.team1Id].win++; table[m.team2Id].loss++; }
-    else if(m.winnerId === m.team2Id){ table[m.team2Id].win++; table[m.team1Id].loss++; }
+    table[m.team1Id].win += r.sets1;
+    table[m.team1Id].loss += r.sets2;
+    table[m.team2Id].win += r.sets2;
+    table[m.team2Id].loss += r.sets1;
   });
   const arr = Object.values(table);
   arr.forEach(t=> t.diff = t.pf - t.pa);
