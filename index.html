@@ -296,15 +296,134 @@ async function fetchWithTimeout(url, opts, ms){
     clearTimeout(timer);
   }
 }
+/* ---------- Firebase RTDB rehydration ----------
+   Firebase silently drops any field that is null or an empty array/object,
+   and turns a sparse array (nulls in the middle, e.g. bracket "bye" slots)
+   into a plain object instead of an array. normalizeState() repairs all of
+   that after every load/poll so the rest of the app can rely on a stable shape. */
+function toArray(value, expectedLength){
+  if(Array.isArray(value)) return value;
+  if(value && typeof value === 'object'){
+    const keys = Object.keys(value).map(k=>parseInt(k,10)).filter(n=>!isNaN(n));
+    const maxIdx = keys.length ? Math.max(...keys) : -1;
+    const len = (expectedLength!=null) ? Math.max(expectedLength, maxIdx+1) : maxIdx+1;
+    const arr = [];
+    for(let i=0;i<len;i++) arr.push(value[i] !== undefined ? value[i] : null);
+    return arr;
+  }
+  return [];
+}
+function normalizeMatch(m){
+  if(!m) return m;
+  m.sets = toArray(m.sets).map(s => ({
+    a: (s && s.a !== undefined) ? s.a : null,
+    b: (s && s.b !== undefined) ? s.b : null
+  }));
+  if(m.team1Id === undefined) m.team1Id = null;
+  if(m.team2Id === undefined) m.team2Id = null;
+  if(m.winnerId === undefined) m.winnerId = null;
+  if(m.doneAt === undefined) m.doneAt = null;
+  if(m.nextMatchId === undefined) m.nextMatchId = null;
+  if(m.nextSlotSide === undefined) m.nextSlotSide = null;
+  if(m.updatedAt === undefined) m.updatedAt = m.doneAt || 0;
+  return m;
+}
+function normalizeCategory(c){
+  c.config = (c.config && typeof c.config === 'object') ? c.config : {};
+  if(c.config.advancePerGroup == null) c.config.advancePerGroup = 2;
+  if(c.config.groupSets == null) c.config.groupSets = 2;
+  c.groups = toArray(c.groups).map(g=>{
+    g.teamIds = toArray(g.teamIds);
+    return g;
+  });
+  c.teamNames = (c.teamNames && typeof c.teamNames === 'object') ? c.teamNames : {};
+  c.matches = toArray(c.matches).map(normalizeMatch);
+  if(c.bracket && typeof c.bracket === 'object'){
+    c.bracket.roundNames = toArray(c.bracket.roundNames);
+  } else {
+    c.bracket = null;
+  }
+  if(c.bracketSetup && typeof c.bracketSetup === 'object'){
+    c.bracketSetup.slots = toArray(c.bracketSetup.slots, c.bracketSetup.size);
+  } else {
+    c.bracketSetup = null;
+  }
+  return c;
+}
+function normalizeState(state){
+  if(!state || typeof state !== 'object') return null;
+  state.eventName = state.eventName || 'แบดมินตัน หน้าทอน เกาะสมุย';
+  state.categories = toArray(state.categories).map(normalizeCategory);
+  if(state.activeCategoryId === undefined) state.activeCategoryId = null;
+  if(state.catSeq === undefined) state.catSeq = state.categories.length;
+  if(state.updatedAt === undefined) state.updatedAt = Date.now();
+  return state;
+}
+
 async function loadState(){
   try{
     const res = await fetchWithTimeout(`${FIREBASE_DB_URL}/${STATE_PATH}.json`, {}, 8000);
     if(!res.ok) return null;
     const data = await res.json();
-    return data || null;
+    return data ? normalizeState(data) : null;
   }catch(e){ console.error('load failed', e); return null; }
 }
-async function saveState(){
+/* ---------- merge-before-write (protects concurrent staff edits) ----------
+   Multiple staff can be entering scores for different matches at the same
+   moment. Since writes replace the whole JSON blob, we fetch the freshest
+   remote copy right before saving and merge our local change into it at the
+   match level (newest updatedAt per match id wins) instead of blindly
+   clobbering whatever anyone else just saved. */
+function mergeMatches(remoteMatches, localMatches){
+  const byId = {};
+  (remoteMatches||[]).forEach(m=>{ byId[m.id] = m; });
+  (localMatches||[]).forEach(lm=>{
+    const rm = byId[lm.id];
+    if(!rm){ byId[lm.id] = lm; return; }
+    const rmTime = rm.updatedAt || rm.doneAt || 0;
+    const lmTime = lm.updatedAt || lm.doneAt || 0;
+    byId[lm.id] = (lmTime >= rmTime) ? lm : rm;
+  });
+  return Object.values(byId);
+}
+function mergeCategory(remoteCat, localCat){
+  const merged = JSON.parse(JSON.stringify(remoteCat));
+  merged.name = localCat.name;
+  merged.config = localCat.config;
+  merged.groups = localCat.groups;
+  merged.teamNames = localCat.teamNames;
+  merged.bracket = localCat.bracket;
+  merged.bracketSetup = localCat.bracketSetup;
+  merged.matches = mergeMatches(remoteCat.matches, localCat.matches);
+  return merged;
+}
+function mergeStates(remote, local){
+  const merged = JSON.parse(JSON.stringify(remote));
+  merged.eventName = local.eventName;
+  merged.activeCategoryId = local.activeCategoryId;
+  merged.catSeq = Math.max(remote.catSeq||0, local.catSeq||0);
+  const remoteById = {};
+  merged.categories.forEach(c=>{ remoteById[c.id]=c; });
+  const mergedCats = [];
+  const seen = new Set();
+  local.categories.forEach(localCat=>{
+    const remoteCat = remoteById[localCat.id];
+    mergedCats.push(remoteCat ? mergeCategory(remoteCat, localCat) : localCat);
+    seen.add(localCat.id);
+  });
+  // keep categories that exist remotely but not locally (created by someone else meanwhile)
+  merged.categories.forEach(c=>{ if(!seen.has(c.id)) mergedCats.push(c); });
+  merged.categories = mergedCats;
+  return merged;
+}
+
+async function saveStateDirect(){
+  /* Plain overwrite — used for structural/admin actions (categories, setup,
+     bracket setup, fixture generation). These can legitimately DELETE things
+     (a category, a group, a match set), and a merge would wrongly resurrect
+     whatever was deleted by pulling it back in from the stale remote copy.
+     These actions are low-frequency / effectively single-operator, so the
+     concurrency risk here is much lower than live score entry. */
   appState.updatedAt = Date.now();
   render();
   const fresh = await ensureFreshToken();
@@ -322,13 +441,41 @@ async function saveState(){
     }
   }catch(e){ console.error('save failed', e); }
 }
+async function saveStateMerged(){
+  /* Match-level merge — used ONLY for score entry, where many staff on
+     different courts genuinely save at the same time. Never deletes matches,
+     only updates fields on existing ones, so the union-merge in mergeMatches
+     is always safe here. */
+  appState.updatedAt = Date.now();
+  render();
+  const fresh = await ensureFreshToken();
+  try{
+    const remote = await loadState();
+    const toWrite = remote ? mergeStates(remote, appState) : appState;
+    toWrite.updatedAt = Date.now();
+    const url = `${FIREBASE_DB_URL}/${STATE_PATH}.json` + (fresh && auth.idToken ? `?auth=${auth.idToken}` : '');
+    const res = await fetchWithTimeout(url, {
+      method:'PUT',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(toWrite)
+    }, 8000);
+    if(res.ok){
+      appState = toWrite;
+      render();
+    } else {
+      alert('บันทึกไม่สำเร็จ — อาจยังไม่ได้เข้าสู่ระบบทีมงาน หรือสิทธิ์หมดอายุ กรุณาเข้าสู่ระบบใหม่');
+      const remote2 = await loadState();
+      if(remote2){ appState = remote2; render(); }
+    }
+  }catch(e){ console.error('save failed', e); }
+}
 async function pollRemote(){
   try{
     const res = await fetchWithTimeout(`${FIREBASE_DB_URL}/${STATE_PATH}.json`, {}, 8000);
     if(!res.ok) return;
     const remote = await res.json();
     if(remote && remote.updatedAt !== appState.updatedAt){
-      appState = remote;
+      appState = normalizeState(remote);
       render();
     }
   }catch(e){ /* ignore transient network errors */ }
@@ -349,7 +496,7 @@ function createCategory(name){
   appState.activeCategoryId = id;
   ui.tab = 'setup';
   ui.scoreEntryMatchId = null;
-  saveState();
+  saveStateDirect();
 }
 function handleCreateCategory(){
   const el = document.getElementById('new-cat-name');
@@ -359,7 +506,7 @@ function handleCreateCategory(){
 function renameCategory(id, name){
   const c = appState.categories.find(x=>x.id===id);
   if(c) c.name = name || c.name;
-  saveState();
+  saveStateDirect();
 }
 function deleteCategory(id){
   if(!confirm('ลบประเภทนี้ทั้งหมด รวมถึงกลุ่ม ทีม และผลการแข่งขันที่บันทึกไว้? การลบนี้ย้อนกลับไม่ได้')) return;
@@ -367,15 +514,15 @@ function deleteCategory(id){
   if(appState.activeCategoryId===id){
     appState.activeCategoryId = appState.categories.length ? appState.categories[0].id : null;
   }
-  saveState();
+  saveStateDirect();
 }
 function switchCategory(id){
   appState.activeCategoryId = id;
   ui.scoreEntryMatchId = null;
   ui.bigScreenIndex = 0;
-  saveState();
+  saveStateDirect();
 }
-function setEventName(name){ appState.eventName = name; saveState(); }
+function setEventName(name){ appState.eventName = name; saveStateDirect(); }
 
 /* ---------- pure helpers (take cat explicitly) ---------- */
 function getTeamName(cat, tid){ return (cat && cat.teamNames[tid]) || tid || '-'; }
@@ -423,8 +570,14 @@ function computeStandings(cat, groupId){
     table[m.team1Id].played++; table[m.team2Id].played++;
     table[m.team1Id].pf += r.pts1; table[m.team1Id].pa += r.pts2;
     table[m.team2Id].pf += r.pts2; table[m.team2Id].pa += r.pts1;
-    if(m.winnerId === m.team1Id){ table[m.team1Id].win++; table[m.team1Id].pts += 1; table[m.team2Id].loss++; }
-    else if(m.winnerId === m.team2Id){ table[m.team2Id].win++; table[m.team2Id].pts += 1; table[m.team1Id].loss++; }
+    // points come directly from sets won: win 1 set = 1 point, win 2 sets = 2 points, etc.
+    // "ชนะ"/"แพ้" are counted the same way — by sets, not by match outcome.
+    table[m.team1Id].pts += r.sets1;
+    table[m.team2Id].pts += r.sets2;
+    table[m.team1Id].win += r.sets1;
+    table[m.team1Id].loss += r.sets2;
+    table[m.team2Id].win += r.sets2;
+    table[m.team2Id].loss += r.sets1;
   });
   const arr = Object.values(table);
   arr.forEach(t=> t.diff = t.pf - t.pa);
@@ -490,7 +643,7 @@ function addGroup(){
     cat.teamNames[tid] = `ทีม ${id}${i}`;
   }
   cat.groups.push({id, teamIds});
-  saveState();
+  saveStateDirect();
 }
 function removeGroup(gid){
   const cat = activeCat(); if(!cat) return;
@@ -499,7 +652,7 @@ function removeGroup(gid){
   g.teamIds.forEach(tid=> delete cat.teamNames[tid]);
   cat.groups = cat.groups.filter(x=>x.id!==gid);
   cat.matches = cat.matches.filter(m=> !(m.stage==='group' && m.groupId===gid));
-  saveState();
+  saveStateDirect();
 }
 function addTeam(gid){
   const cat = activeCat(); if(!cat) return;
@@ -508,7 +661,7 @@ function addTeam(gid){
   const tid = gid+idx;
   g.teamIds.push(tid);
   cat.teamNames[tid] = `ทีม ${gid}${idx}`;
-  saveState();
+  saveStateDirect();
 }
 function removeTeam(gid, tid){
   const cat = activeCat(); if(!cat) return;
@@ -516,22 +669,22 @@ function removeTeam(gid, tid){
   if(g.teamIds.length <= 2){ alert('แต่ละกลุ่มต้องมีอย่างน้อย 2 ทีม'); return; }
   g.teamIds = g.teamIds.filter(x=>x!==tid);
   delete cat.teamNames[tid];
-  saveState();
+  saveStateDirect();
 }
 function renameTeam(tid, name){
   const cat = activeCat(); if(!cat) return;
   cat.teamNames[tid] = name || tid;
-  saveState();
+  saveStateDirect();
 }
 function setAdvancePerGroup(n){
   const cat = activeCat(); if(!cat) return;
   cat.config.advancePerGroup = Math.max(1, parseInt(n)||1);
-  saveState();
+  saveStateDirect();
 }
 function setGroupSets(n){
   const cat = activeCat(); if(!cat) return;
   cat.config.groupSets = Math.max(1, parseInt(n)||2);
-  saveState();
+  saveStateDirect();
 }
 
 function generateGroupFixtures(){
@@ -550,7 +703,7 @@ function generateGroupFixtures(){
           stage:'group', groupId:g.id, round:ridx+1,
           team1Id:pair[0], team2Id:pair[1],
           sets: Array.from({length: cat.config.groupSets}, ()=>({a:null,b:null})),
-          status:'pending', winnerId:null, doneAt:null
+          status:'pending', winnerId:null, doneAt:null, updatedAt:Date.now()
         });
       });
     });
@@ -558,11 +711,17 @@ function generateGroupFixtures(){
   cat.matches = newMatches;
   cat.bracket = null;
   cat.bracketSetup = null;
-  saveState();
+  saveStateDirect();
 }
 
 /* ---------- knockout: manual bracket setup ---------- */
 function suggestedQualifiers(cat){
+  /* Every rank tier (1st place of each group, then 2nd place of each group, etc.)
+     is kept in natural group order. Combined with the standard bracket seed
+     order, this guarantees round 1 always pairs teams from DIFFERENT groups,
+     and a group's rank-1 team always meets another group's LAST qualifying
+     rank (e.g. with top-2 advancing: 1st place meets a 2nd place from another
+     group; never its own group's 2nd place). */
   const advance = cat.config.advancePerGroup;
   const groups = cat.groups;
   const standingsByGroup = {};
@@ -570,7 +729,6 @@ function suggestedQualifiers(cat){
   let list = [];
   for(let rank=0; rank<advance; rank++){
     let rankTeams = groups.map(g=> standingsByGroup[g.id][rank] ? standingsByGroup[g.id][rank].teamId : null).filter(Boolean);
-    if(rank % 2 === 1) rankTeams.reverse();
     list.push(...rankTeams);
   }
   return list;
@@ -608,13 +766,13 @@ function setBracketSize(newSize){
   const slots = new Array(newSize).fill(null);
   for(let i=0;i<Math.min(newSize, draft.slots.length); i++) slots[i] = draft.slots[i];
   cat.bracketSetup = {size:newSize, slots};
-  saveState();
+  saveStateDirect();
 }
 function setSlotTeam(idx, teamId){
   const cat = activeCat(); if(!cat) return;
   const draft = ensureDraft(cat);
   draft.slots[idx] = teamId || null;
-  saveState();
+  saveStateDirect();
 }
 function autoFillBracket(){
   const cat = activeCat(); if(!cat) return;
@@ -624,19 +782,20 @@ function autoFillBracket(){
   const ord = seedOrder(draft.size);
   ord.forEach((seed,i)=>{ slots[i] = qualifiers[seed-1] || null; });
   cat.bracketSetup = {size:draft.size, slots};
-  saveState();
+  saveStateDirect();
 }
 function clearBracketSlots(){
   const cat = activeCat(); if(!cat) return;
   const draft = ensureDraft(cat);
   cat.bracketSetup = {size:draft.size, slots:new Array(draft.size).fill(null)};
-  saveState();
+  saveStateDirect();
 }
 function propagateWinner(cat, match){
   if(!match.nextMatchId) return;
   const next = findMatch(cat, match.nextMatchId);
   if(!next) return;
   if(match.nextSlotSide==='team1') next.team1Id = match.winnerId; else next.team2Id = match.winnerId;
+  next.updatedAt = Date.now();
 }
 function resolveByesInPlace(cat){
   const firstRoundName = cat.bracket.roundNames[0];
@@ -646,7 +805,7 @@ function resolveByesInPlace(cat){
     cat.matches.filter(m=>m.stage==='knockout' && m.round===firstRoundName && m.status==='pending').forEach(m=>{
       const hasT1 = !!m.team1Id, hasT2 = !!m.team2Id;
       if(hasT1 !== hasT2){
-        m.status='done'; m.winnerId = hasT1 ? m.team1Id : m.team2Id; m.doneAt = Date.now(); m.sets = [];
+        m.status='done'; m.winnerId = hasT1 ? m.team1Id : m.team2Id; m.doneAt = Date.now(); m.updatedAt = Date.now(); m.sets = [];
         propagateWinner(cat, m);
         changed = true;
       }
@@ -674,7 +833,7 @@ function confirmBracketSetup(){
         id:`KO-${roundName}-${s+1}`, stage:'knockout', round:roundName, slot:s+1,
         team1Id: ri===0 ? slots[s*2] : null,
         team2Id: ri===0 ? slots[s*2+1] : null,
-        sets:[], status:'pending', winnerId:null, doneAt:null,
+        sets:[], status:'pending', winnerId:null, doneAt:null, updatedAt:Date.now(),
         nextMatchId:null, nextSlotSide:null
       });
     }
@@ -693,7 +852,7 @@ function confirmBracketSetup(){
   cat.matches = cat.matches.filter(m=>m.stage==='group').concat(matches);
   cat.bracket = {size, roundNames, generated:true};
   resolveByesInPlace(cat);
-  saveState();
+  saveStateDirect();
 }
 function editBracket(){
   const cat = activeCat(); if(!cat) return;
@@ -709,7 +868,7 @@ function editBracket(){
   cat.bracket = null;
   cat.bracketSetup = {size, slots};
   cat.matches = cat.matches.filter(m=>m.stage!=='knockout');
-  saveState();
+  saveStateDirect();
 }
 
 /* ---------- score submission ---------- */
@@ -722,16 +881,19 @@ function submitGroupScore(matchId, setsVals){
   }
   match.sets = setsVals;
   const r = groupMatchResult(match);
+  // points come directly from sets won (see computeStandings), so a split
+  // result like 1-1 is a normal completed match, not an unresolved tie —
+  // winnerId here is purely informational (who took more sets), and can be
+  // null if the sets were split evenly.
   let winner = null;
   if(r.sets1 > r.sets2) winner = match.team1Id;
   else if(r.sets2 > r.sets1) winner = match.team2Id;
-  else if(r.pts1 > r.pts2) winner = match.team1Id;
-  else if(r.pts2 > r.pts1) winner = match.team2Id;
   match.winnerId = winner;
-  match.status = winner ? 'done' : 'tie';
+  match.status = 'done';
   match.doneAt = Date.now();
+  match.updatedAt = Date.now();
   ui.scoreEntryMatchId = null;
-  saveState();
+  saveStateMerged();
 }
 function submitKnockoutScore(matchId, setsVals){
   const cat = activeCat(); if(!cat) return;
@@ -741,6 +903,7 @@ function submitKnockoutScore(matchId, setsVals){
   let w1=0,w2=0;
   sets.forEach(s=>{ if(Number(s.a)>Number(s.b)) w1++; else if(Number(s.b)>Number(s.a)) w2++; });
   match.sets = sets;
+  match.updatedAt = Date.now();
   if(w1>=2 || w2>=2){
     match.status = 'done';
     match.winnerId = w1>=2 ? match.team1Id : match.team2Id;
@@ -752,7 +915,7 @@ function submitKnockoutScore(matchId, setsVals){
     match.winnerId = null;
   }
   ui.scoreEntryMatchId = null;
-  saveState();
+  saveStateMerged();
 }
 
 /* ---------- render: shell ---------- */
@@ -922,7 +1085,7 @@ function renderSetup(){
 
   <div class="card">
     <h2>สร้างตารางแข่ง</h2>
-    <p class="note">กดปุ่มนี้เพื่อสร้างตารางพบกันหมดของทุกกลุ่มตามรายชื่อทีมด้านบน (แข่ง ${cat.config.groupSets} เซตต่อคู่ ชนะได้ 1 แต้ม แพ้ได้ 0 แต้ม ตัดเสมอด้วยแต้มได้เสีย)</p>
+    <p class="note">กดปุ่มนี้เพื่อสร้างตารางพบกันหมดของทุกกลุ่มตามรายชื่อทีมด้านบน (แข่ง ${cat.config.groupSets} เซตต่อคู่ นับแต้มจากเซตที่ชนะโดยตรง ชนะ 1 เซตได้ 1 แต้ม ชนะ 2 เซตได้ 2 แต้ม สะสมแต้มตลอดรอบแบ่งกลุ่ม ตัดเสมอด้วยคะแนนได้-เสีย)</p>
     <button class="btn primary" onclick="generateGroupFixtures()">สร้าง / รีเซ็ตตารางแข่งรอบแบ่งกลุ่ม</button>
   </div>
   `;
