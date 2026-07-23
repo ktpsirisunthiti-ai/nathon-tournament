@@ -120,11 +120,32 @@ tr.rank2{background:#F5FAF6;}
 .badge.ongoing{background:#FAEEDA;color:#854F0B;}
 .badge.pending{background:#F1EFE8;color:#5F5E5A;}
 .badge.tie{background:#FCEBEB;color:#791F1F;}
-.match-row{display:flex;align-items:center;gap:10px;padding:9px 6px;border-bottom:1px solid var(--line);font-size:14px;flex-wrap:wrap;}
+.match-row{
+  display:grid;
+  grid-template-columns: minmax(140px,1.1fr) minmax(92px,108px) minmax(72px,85px) minmax(95px,115px) minmax(75px,auto) minmax(76px,auto) minmax(72px,auto) minmax(72px,auto);
+  align-items:center;gap:6px 8px;padding:9px 6px;border-bottom:1px solid var(--line);font-size:14px;
+}
 .match-row:last-child{border-bottom:none;}
-.match-teams{flex:1;min-width:180px;font-weight:500;}
+.match-teams{font-weight:500;}
 .match-teams .vs{color:var(--ink-soft);font-weight:400;margin:0 6px;}
 .match-score{font-family:'Kanit',sans-serif;font-weight:700;color:var(--court-green);white-space:nowrap;}
+.match-row select, .match-row input[type=time], .bracket-match select, .bracket-match input[type=time]{
+  font-size:12.5px;padding:6px 4px;width:100%;
+}
+.schedule-readonly{font-size:12px;color:var(--sea-teal);white-space:nowrap;}
+.schedule-row{
+  display:grid;
+  grid-template-columns: minmax(150px,1.2fr) minmax(92px,108px) minmax(72px,85px) minmax(95px,115px) minmax(76px,auto);
+  align-items:center;gap:6px 8px;padding:9px 6px;border-bottom:1px solid var(--line);font-size:14px;
+}
+.schedule-row:last-child{border-bottom:none;}
+.schedule-row select, .schedule-row input[type=time]{font-size:12.5px;padding:6px 4px;width:100%;}
+@media (max-width:760px){
+  .schedule-row{grid-template-columns: 1fr; row-gap:6px; padding:12px 6px;}
+}
+@media (max-width:760px){
+  .match-row{grid-template-columns: 1fr; row-gap:6px; padding:12px 6px;}
+}
 .setbox-list{display:flex;gap:12px;flex-wrap:wrap;margin:10px 0;}
 .setbox{border:1px solid var(--line);border-radius:8px;padding:10px;background:#FCFAF3;min-width:160px;}
 .setbox .setlabel{font-family:'Kanit',sans-serif;font-size:13px;color:var(--ink-soft);margin-bottom:6px;}
@@ -136,11 +157,22 @@ tr.rank2{background:#F5FAF6;}
 .empty{color:var(--ink-soft);font-size:14px;padding:14px 0;text-align:center;}
 .bracket-round{margin-bottom:20px;}
 .bracket-round h3{margin-top:0;}
-.bracket-match{border:1px solid var(--line);border-radius:8px;padding:8px 12px;margin-bottom:8px;background:#FCFAF3;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;}
-.bracket-match .side{font-weight:500;flex:1;min-width:120px;}
+.bracket-match{
+  border:1px solid var(--line);border-radius:8px;padding:8px 12px;margin-bottom:8px;background:#FCFAF3;
+  display:grid;
+  grid-template-columns: minmax(90px,1fr) minmax(104px,116px) minmax(90px,1fr) minmax(76px,auto) minmax(92px,108px) minmax(72px,85px) minmax(95px,115px) minmax(110px,auto);
+  align-items:center;gap:6px 8px;
+}
+.bracket-match .side{font-weight:500;}
+.bracket-match .side:first-child{text-align:right;}
 .bracket-match .side.winner{color:var(--court-green);font-weight:700;}
-.bracket-match .score{font-family:'Kanit',sans-serif;font-weight:700;white-space:nowrap;}
+.bracket-match .score{font-family:'Kanit',sans-serif;font-weight:700;white-space:nowrap;text-align:center;color:var(--court-green);}
+.bracket-actions{display:flex;gap:8px;flex-wrap:wrap;}
+@media (max-width:760px){
+  .bracket-match{grid-template-columns: 1fr 1fr; row-gap:6px;}
+}
 .enter-link{font-size:12.5px;color:var(--sea-teal);cursor:pointer;text-decoration:underline;background:none;border:none;font-family:inherit;}
+.cancel-link{font-size:12.5px;color:var(--danger);cursor:pointer;text-decoration:underline;background:none;border:none;font-family:inherit;}
 .bigscreen{
   background:var(--court-green-dark);color:var(--shuttle-white);
   border-radius:14px;padding:24px 28px;min-height:60vh;
@@ -175,6 +207,7 @@ const STATE_PATH = 'tournament_state';
 /* Find this in Firebase Console > Project settings > General > Web API Key */
 const FIREBASE_API_KEY = 'AIzaSyC38vKjo8tOQgUlxZqlCLaBBF87IGW3_Pw';
 const AUTH_LS_KEY = 'badminton_staff_refresh_v1';
+const COURTS = ['คอร์ต 1', 'คอร์ต 2', 'คอร์ต 3'];
 
 let appState = null;
 let ui = { tab:'categories', scoreEntryMatchId:null, bigScreenIndex:0, bigScreenPlaying:true, bigScreenFilter:'all', showLoginForm:false };
@@ -279,7 +312,7 @@ function makeDefaultCategory(id, name){
 
 function defaultState(){
   return {
-    eventName:'แบดมินตัน หน้าทอน เกาะสมุย',
+    eventName:'Nathon Badminton Challenge#2 2026',
     categories: [],
     activeCategoryId: null,
     catSeq: 0,
@@ -326,6 +359,8 @@ function normalizeMatch(m){
   if(m.nextMatchId === undefined) m.nextMatchId = null;
   if(m.nextSlotSide === undefined) m.nextSlotSide = null;
   if(m.updatedAt === undefined) m.updatedAt = m.doneAt || 0;
+  if(m.scheduledAt === undefined) m.scheduledAt = null;
+  if(m.court === undefined) m.court = null;
   return m;
 }
 function normalizeCategory(c){
@@ -386,6 +421,36 @@ function mergeMatches(remoteMatches, localMatches){
   });
   return Object.values(byId);
 }
+function reconcileKnockoutSlots(cat){
+  /* Which teams occupy a knockout slot is not independent data — it is a pure
+     function of the feeding matches' results. Storing it and merging it
+     field-by-field lets two devices disagree (e.g. one clears a result while
+     the other edits the same next-round match, and the stale team comes back).
+     So after every merge we simply re-derive every slot after round 1.
+     Round 1 is left alone: it comes from the admin-chosen bracket setup. */
+  if(!cat.bracket || !cat.bracket.generated) return;
+  const roundNames = toArray(cat.bracket.roundNames);
+  if(roundNames.length < 2) return;
+  const laterRounds = new Set(roundNames.slice(1));
+  cat.matches.forEach(m=>{
+    if(m.stage==='knockout' && laterRounds.has(m.round)){ m.team1Id = null; m.team2Id = null; }
+  });
+  roundNames.forEach(rn=>{
+    cat.matches.filter(m=>m.stage==='knockout' && m.round===rn && m.nextMatchId).forEach(m=>{
+      const next = cat.matches.find(x=>x.id===m.nextMatchId);
+      if(!next) return;
+      const advancing = (m.status==='done' && m.winnerId) ? m.winnerId : null;
+      if(m.nextSlotSide==='team1') next.team1Id = advancing; else next.team2Id = advancing;
+    });
+  });
+  // A match that lost one of its teams can no longer hold a valid result.
+  cat.matches.forEach(m=>{
+    if(m.stage!=='knockout' || !laterRounds.has(m.round)) return;
+    if(m.status==='done' && (!m.team1Id || !m.team2Id)){
+      m.status='pending'; m.winnerId=null; m.sets=[]; m.doneAt=null;
+    }
+  });
+}
 function mergeCategory(remoteCat, localCat){
   const merged = JSON.parse(JSON.stringify(remoteCat));
   merged.name = localCat.name;
@@ -395,6 +460,7 @@ function mergeCategory(remoteCat, localCat){
   merged.bracket = localCat.bracket;
   merged.bracketSetup = localCat.bracketSetup;
   merged.matches = mergeMatches(remoteCat.matches, localCat.matches);
+  reconcileKnockoutSlots(merged);
   return merged;
 }
 function mergeStates(remote, local){
@@ -469,11 +535,23 @@ async function saveStateMerged(){
     }
   }catch(e){ console.error('save failed', e); }
 }
+function isUserEditing(){
+  /* The 4s background refresh re-renders the whole page, which would wipe
+     whatever a staff member is currently typing (team names, scores) or
+     reset an open dropdown. Skip the refresh while a field is focused —
+     the next poll picks the change up a few seconds later. */
+  const el = document.activeElement;
+  if(!el) return false;
+  const tag = el.tagName;
+  return tag==='INPUT' || tag==='SELECT' || tag==='TEXTAREA';
+}
 async function pollRemote(){
+  if(isUserEditing()) return;
   try{
     const res = await fetchWithTimeout(`${FIREBASE_DB_URL}/${STATE_PATH}.json`, {}, 8000);
     if(!res.ok) return;
     const remote = await res.json();
+    if(isUserEditing()) return; // they may have started typing while we waited on the network
     if(remote && remote.updatedAt !== appState.updatedAt){
       appState = normalizeState(remote);
       render();
@@ -628,6 +706,53 @@ function getCategoryChampion(cat){
   if(finalMatch && finalMatch.status==='done' && finalMatch.winnerId) return getTeamName(cat, finalMatch.winnerId);
   return null;
 }
+function matchLabel(m){
+  if(m.stage==='group') return `กลุ่ม ${m.groupId}`;
+  return roundThai(m.round);
+}
+function formatScheduleDT(str){
+  if(!str) return '';
+  const d = new Date(str);
+  if(isNaN(d.getTime())) return str;
+  const months = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+  const dd = d.getDate();
+  const mm = months[d.getMonth()];
+  const hh = String(d.getHours()).padStart(2,'0');
+  const mi = String(d.getMinutes()).padStart(2,'0');
+  return `${dd} ${mm} ${hh}:${mi}`;
+}
+const TOURNAMENT_DAYS = [
+  {value:'2026-08-08', label:'8 ส.ค. 2569'},
+  {value:'2026-08-09', label:'9 ส.ค. 2569'}
+];
+function setMatchDate(matchId, dateVal){
+  const cat = activeCat(); if(!cat) return;
+  const m = findMatch(cat, matchId); if(!m) return;
+  const timePart = m.scheduledAt ? m.scheduledAt.slice(11,16) : '00:00';
+  m.scheduledAt = dateVal ? `${dateVal}T${timePart}` : null;
+  m.updatedAt = Date.now();
+  saveStateMerged();
+}
+function setMatchTimeOnly(matchId, timeVal){
+  const cat = activeCat(); if(!cat) return;
+  const m = findMatch(cat, matchId); if(!m) return;
+  if(!timeVal){
+    // clearing the time: keep date if one was set, else clear entirely
+    m.scheduledAt = m.scheduledAt ? `${m.scheduledAt.slice(0,10)}T00:00` : null;
+  } else {
+    const datePart = m.scheduledAt ? m.scheduledAt.slice(0,10) : TOURNAMENT_DAYS[0].value;
+    m.scheduledAt = `${datePart}T${timeVal}`;
+  }
+  m.updatedAt = Date.now();
+  saveStateMerged();
+}
+function setMatchCourt(matchId, value){
+  const cat = activeCat(); if(!cat) return;
+  const m = findMatch(cat, matchId); if(!m) return;
+  m.court = value || null;
+  m.updatedAt = Date.now();
+  saveStateMerged();
+}
 
 /* ---------- setup mutations (operate on active category) ---------- */
 function nextGroupLetter(cat){ return String.fromCharCode(65 + cat.groups.length); }
@@ -703,7 +828,8 @@ function generateGroupFixtures(){
           stage:'group', groupId:g.id, round:ridx+1,
           team1Id:pair[0], team2Id:pair[1],
           sets: Array.from({length: cat.config.groupSets}, ()=>({a:null,b:null})),
-          status:'pending', winnerId:null, doneAt:null, updatedAt:Date.now()
+          status:'pending', winnerId:null, doneAt:null, updatedAt:Date.now(),
+          scheduledAt:null, court:null
         });
       });
     });
@@ -834,7 +960,7 @@ function confirmBracketSetup(){
         team1Id: ri===0 ? slots[s*2] : null,
         team2Id: ri===0 ? slots[s*2+1] : null,
         sets:[], status:'pending', winnerId:null, doneAt:null, updatedAt:Date.now(),
-        nextMatchId:null, nextSlotSide:null
+        nextMatchId:null, nextSlotSide:null, scheduledAt:null, court:null
       });
     }
     count = numMatches;
@@ -917,6 +1043,49 @@ function submitKnockoutScore(matchId, setsVals){
   ui.scoreEntryMatchId = null;
   saveStateMerged();
 }
+function clearGroupScore(matchId){
+  const cat = activeCat(); if(!cat) return;
+  const match = findMatch(cat, matchId);
+  if(!match || match.status!=='done') return;
+  if(!confirm('ยืนยันยกเลิกผลการแข่งขันคู่นี้? คู่นี้จะกลับไปเป็น "รอแข่ง"')) return;
+  match.sets = Array.from({length: cat.config.groupSets}, ()=>({a:null,b:null}));
+  match.winnerId = null;
+  match.status = 'pending';
+  match.doneAt = null;
+  match.updatedAt = Date.now();
+  ui.scoreEntryMatchId = null;
+  saveStateMerged();
+}
+function clearKnockoutScore(matchId){
+  const cat = activeCat(); if(!cat) return;
+  const match = findMatch(cat, matchId);
+  if(!match || match.status!=='done') return;
+  const isBye = !match.sets || match.sets.length===0;
+  if(isBye){ alert('คู่นี้ได้บายเข้ารอบ ไม่มีผลคะแนนให้ยกเลิก — ถ้าต้องการเปลี่ยน ให้แก้ไขสายที่แท็บ "รอบตัดเชือก" แทน'); return; }
+  const msg = match.nextMatchId
+    ? 'ยืนยันยกเลิกผลการแข่งขันคู่นี้? ถ้าทีมที่ชนะไปแข่งในรอบถัดไปแล้ว ผลตรงนั้นจะไม่ถูกต้องด้วย กรุณาตรวจสอบ/แก้ไขรอบถัดไปเองหลังยกเลิก'
+    : 'ยืนยันยกเลิกผลการแข่งขันคู่นี้?';
+  if(!confirm(msg)) return;
+  const oldWinnerId = match.winnerId;
+  match.sets = [];
+  match.winnerId = null;
+  match.status = 'pending';
+  match.doneAt = null;
+  match.updatedAt = Date.now();
+  if(match.nextMatchId){
+    const next = findMatch(cat, match.nextMatchId);
+    if(next){
+      let touched = false;
+      if(match.nextSlotSide==='team1' && next.team1Id===oldWinnerId){ next.team1Id = null; touched = true; }
+      if(match.nextSlotSide==='team2' && next.team2Id===oldWinnerId){ next.team2Id = null; touched = true; }
+      // must bump updatedAt, or the match-level merge would prefer the
+      // server's stale copy and silently put the removed team back.
+      if(touched) next.updatedAt = Date.now();
+    }
+  }
+  ui.scoreEntryMatchId = null;
+  saveStateMerged();
+}
 
 /* ---------- render: shell ---------- */
 function setTab(t){ ui.tab = t; ui.scoreEntryMatchId = null; render(); }
@@ -938,7 +1107,7 @@ function renderHeader(){
     <p class="eyebrow">Live tournament board</p>
     <h1><input type="text" value="${esc(appState.eventName)}" onchange="setEventName(this.value)"
       style="background:transparent;border:none;color:inherit;font:inherit;padding:0;width:100%;max-width:600px;"></h1>
-    <p class="sub">${cat ? `กำลังใช้งานประเภท: <b>${esc(cat.name)}</b> · ` : ''}จอนี้ใช้ข้อมูลร่วมกันทุกอุปกรณ์ที่เปิดลิงก์นี้</p>
+    ${cat ? `<p class="sub">กำลังใช้งานประเภท: <b>${esc(cat.name)}</b></p>` : ''}
     ${renderAuthWidget()}
   </div>`;
 }
@@ -966,6 +1135,7 @@ function renderNav(){
     ['setup','ตั้งค่า'],
     ['groups','กลุ่ม & อันดับ'],
     ['bracket','รอบตัดเชือก'],
+    ['schedule','กำหนดการ'],
     ['scoreentry','กรอกคะแนน'],
     ['bigscreen','จอกลาง']
   ];
@@ -989,6 +1159,7 @@ function renderTabContent(){
     case 'setup': return renderSetup();
     case 'groups': return renderGroupsTab();
     case 'bracket': return renderBracketTab();
+    case 'schedule': return renderScheduleTab();
     case 'scoreentry': return renderScoreEntryTab();
     case 'bigscreen': return renderBigScreen();
     default: return '';
@@ -1143,6 +1314,28 @@ function statusBadge(m){
   return `<span class="badge ${cls}">${label}</span>`;
 }
 
+function renderScheduleControls(m, loggedIn){
+  const dateVal = m.scheduledAt ? m.scheduledAt.slice(0,10) : '';
+  const timeVal = m.scheduledAt ? m.scheduledAt.slice(11,16) : '';
+  if(loggedIn){
+    const dateCell = `<select onchange="setMatchDate('${m.id}', this.value)">
+      <option value="">วันที่</option>
+      ${TOURNAMENT_DAYS.map(d=>`<option value="${d.value}" ${dateVal===d.value?'selected':''}>${d.label}</option>`).join('')}
+    </select>`;
+    const timeCell = `<input type="time" value="${esc(timeVal)}" onchange="setMatchTimeOnly('${m.id}', this.value)">`;
+    const courtCell = `<select onchange="setMatchCourt('${m.id}', this.value)">
+      <option value="">ไม่ระบุคอร์ต</option>
+      ${COURTS.map(c=>`<option value="${esc(c)}" ${m.court===c?'selected':''}>${esc(c)}</option>`).join('')}
+    </select>`;
+    return dateCell + timeCell + courtCell;
+  }
+  const dayLabel = (TOURNAMENT_DAYS.find(d=>d.value===dateVal)||{}).label || '';
+  const dateCell = dayLabel ? `<span class="schedule-readonly">${dayLabel}</span>` : `<span></span>`;
+  const timeCell = timeVal ? `<span class="schedule-readonly">${esc(timeVal)}</span>` : `<span></span>`;
+  const courtCell = m.court ? `<span class="schedule-readonly">${esc(m.court)}</span>` : `<span></span>`;
+  return dateCell + timeCell + courtCell;
+}
+
 function renderMatchRow(cat, m){
   const t1 = getTeamName(cat, m.team1Id) || 'รอทีม';
   const t2 = getTeamName(cat, m.team2Id) || 'รอทีม';
@@ -1150,15 +1343,21 @@ function renderMatchRow(cat, m){
   if(m.sets && m.sets.length){
     scoreStr = m.sets.filter(s=>s.a!=null&&s.b!=null).map(s=>`${s.a}-${s.b}`).join(', ');
   }
-  const enterLink = isLoggedIn()
-    ? (m.status!=='done' ? `<button class="enter-link" onclick="goScoreEntry('${m.id}')">กรอกคะแนน</button>` : `<button class="enter-link" onclick="goScoreEntry('${m.id}')">แก้ไข</button>`)
-    : '';
+  const loggedIn = isLoggedIn();
+  const editLink = loggedIn
+    ? `<button class="enter-link" onclick="goScoreEntry('${m.id}')">${m.status!=='done'?'กรอกคะแนน':'แก้ไข'}</button>`
+    : `<span></span>`;
+  const cancelLink = (loggedIn && m.status==='done')
+    ? `<button class="cancel-link" onclick="clearGroupScore('${m.id}')">ยกเลิกผล</button>`
+    : `<span></span>`;
   return `
   <div class="match-row">
     <span class="match-teams">${esc(t1)}<span class="vs">vs</span>${esc(t2)}</span>
+    ${renderScheduleControls(m, loggedIn)}
     <span class="match-score">${esc(scoreStr)}</span>
     ${statusBadge(m)}
-    ${enterLink}
+    ${editLink}
+    ${cancelLink}
   </div>`;
 }
 
@@ -1251,14 +1450,20 @@ function renderBracketMatch(cat, m){
   const t2 = m.team2Id ? getTeamName(cat, m.team2Id) : 'รอผู้เข้ารอบ';
   const isBye = m.status==='done' && (!m.sets || m.sets.length===0);
   const scoreStr = isBye ? 'ได้บายเข้ารอบ' : (m.sets||[]).map(s=>`${s.a}-${s.b}`).join(', ');
-  const canEnter = m.team1Id && m.team2Id && !isBye && isLoggedIn();
+  const loggedIn = isLoggedIn();
+  const canEnter = m.team1Id && m.team2Id && !isBye && loggedIn;
+  const canCancel = loggedIn && m.status==='done' && !isBye;
   return `
   <div class="bracket-match">
     <span class="side ${m.winnerId===m.team1Id?'winner':''}">${esc(t1)}</span>
     <span class="score">${esc(scoreStr)}</span>
     <span class="side ${m.winnerId===m.team2Id?'winner':''}">${esc(t2)}</span>
-    ${isBye ? '' : statusBadge(m)}
-    ${canEnter ? `<button class="enter-link" onclick="goScoreEntry('${m.id}')">${m.status==='done'?'แก้ไข':'กรอกคะแนน'}</button>` : ''}
+    ${isBye ? `<span></span>` : statusBadge(m)}
+    ${renderScheduleControls(m, loggedIn)}
+    <span class="bracket-actions">
+      ${canEnter ? `<button class="enter-link" onclick="goScoreEntry('${m.id}')">${m.status==='done'?'แก้ไข':'กรอกคะแนน'}</button>` : ''}
+      ${canCancel ? `<button class="cancel-link" onclick="clearKnockoutScore('${m.id}')">ยกเลิกผล</button>` : ''}
+    </span>
   </div>`;
 }
 
@@ -1357,6 +1562,47 @@ function renderBracketSVG(cat, theme){
 }
 
 /* ---------- Score entry tab ---------- */
+/* ---------- Schedule tab ---------- */
+function renderScheduleTab(){
+  const cat = activeCat();
+  if(!cat) return noCategoryNotice();
+  const loggedIn = isLoggedIn();
+  const allMatches = cat.matches.slice();
+  if(allMatches.length===0){
+    return `<div class="card"><div class="empty">ยังไม่มีคู่แข่งขัน สร้างตารางแข่งก่อนที่แท็บ "ตั้งค่า"</div></div>`;
+  }
+  const scheduled = allMatches.filter(m=>m.scheduledAt).sort((a,b)=> new Date(a.scheduledAt) - new Date(b.scheduledAt));
+  const unscheduled = allMatches.filter(m=>!m.scheduledAt);
+  return `
+  <div class="card">
+    <h2>กำหนดการแข่งขัน — ${esc(cat.name)}</h2>
+    ${loggedIn ? `<p class="note">ระบุวันเวลาและคอร์ตให้แต่ละคู่ได้ที่นี่ คู่ที่กำหนดเวลาแล้วจะเรียงตามเวลาให้อัตโนมัติ ส่วนคู่ที่ยังไม่กำหนดจะอยู่ในรายการด้านล่าง</p>` : ''}
+    ${scheduled.length===0
+      ? `<div class="empty">ยังไม่มีคู่ไหนกำหนดวันเวลา</div>`
+      : scheduled.map(m=>renderScheduleRow(cat,m,loggedIn)).join('')}
+  </div>
+  ${unscheduled.length ? `
+  <div class="card">
+    <h3 style="margin-top:0;">ยังไม่กำหนดวันเวลา</h3>
+    ${unscheduled.map(m=>renderScheduleRow(cat,m,loggedIn)).join('')}
+  </div>` : ''}
+  `;
+}
+
+function renderScheduleRow(cat, m, loggedIn){
+  const t1 = m.team1Id ? getTeamName(cat,m.team1Id) : 'รอผู้เข้ารอบ';
+  const t2 = m.team2Id ? getTeamName(cat,m.team2Id) : 'รอผู้เข้ารอบ';
+  return `
+  <div class="schedule-row">
+    <span class="match-teams">
+      <span style="font-size:12px;color:var(--sea-teal);display:block;">${matchLabel(m)}</span>
+      ${esc(t1)}<span class="vs">vs</span>${esc(t2)}
+    </span>
+    ${renderScheduleControls(m, loggedIn)}
+    ${statusBadge(m)}
+  </div>`;
+}
+
 function renderScoreEntryTab(){
   if(!isLoggedIn()) return requireLoginNotice();
   const cat = activeCat();
@@ -1450,6 +1696,7 @@ function getBigScreenPages(){
   cats.forEach(cat=>{
     if(cat.groups.length) pages.push({type:'groups-all', catId:cat.id});
     pages.push({type:'live', catId:cat.id});
+    if(cat.matches.some(m=>m.scheduledAt)) pages.push({type:'schedule', catId:cat.id});
     if(cat.bracket && cat.bracket.generated) pages.push({type:'bracket', catId:cat.id});
   });
   return pages;
@@ -1485,6 +1732,7 @@ function renderBigScreen(){
   let body = '';
   if(page.type==='groups-all') body = renderBSAllGroups(cat);
   else if(page.type==='live') body = renderBSLive(cat);
+  else if(page.type==='schedule') body = renderBSSchedule(cat);
   else if(page.type==='bracket') body = `<div style="overflow-x:auto;">${renderBracketSVG(cat, 'dark')}</div>`;
 
   return `
@@ -1523,6 +1771,23 @@ function renderBSAllGroups(cat){
       </div>`;
     }).join('')}
   </div>`;
+}
+
+function renderBSSchedule(cat){
+  const upcoming = cat.matches.filter(m=>m.scheduledAt && m.status!=='done')
+    .sort((a,b)=> new Date(a.scheduledAt) - new Date(b.scheduledAt)).slice(0,10);
+  return `
+  <h3 style="font-family:'Kanit',sans-serif;color:var(--shuttle-white);font-size:clamp(17px,2.4vw,22px);margin:0 0 10px;">กำหนดการแข่งขัน</h3>
+  ${upcoming.length===0 ? `<div class="empty" style="color:#CFE3DC;">ยังไม่มีคู่ที่กำหนดเวลาไว้</div>` :
+    upcoming.map(m=>`
+    <div class="match-row">
+      <span class="match-teams">
+        <span style="font-size:0.75em;color:var(--gold);display:block;">${formatScheduleDT(m.scheduledAt)}${m.court?' · '+esc(m.court):''} · ${matchLabel(m)}</span>
+        ${esc(m.team1Id?getTeamName(cat,m.team1Id):'รอผู้เข้ารอบ')}<span class="vs">vs</span>${esc(m.team2Id?getTeamName(cat,m.team2Id):'รอผู้เข้ารอบ')}
+      </span>
+      ${statusBadge(m)}
+    </div>`).join('')
+  }`;
 }
 
 function renderBSLive(cat){
