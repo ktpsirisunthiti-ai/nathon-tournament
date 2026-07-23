@@ -133,6 +133,14 @@ tr.rank2{background:#F5FAF6;}
   font-size:12.5px;padding:6px 4px;width:100%;
 }
 .schedule-readonly{font-size:12px;color:var(--sea-teal);white-space:nowrap;}
+.schedule-time{
+  font-family:'Kanit',sans-serif;font-weight:800;color:var(--court-green);
+  font-size:16px;white-space:nowrap;font-variant-numeric:tabular-nums;letter-spacing:0.5px;
+}
+.schedule-court{
+  font-family:'Kanit',sans-serif;font-size:12px;font-weight:600;color:var(--sunset-dark);
+  background:#FBEDE7;border-radius:20px;padding:3px 10px;white-space:nowrap;justify-self:start;
+}
 .schedule-row{
   display:grid;
   grid-template-columns: minmax(150px,1.2fr) minmax(92px,108px) minmax(72px,85px) minmax(95px,115px) minmax(76px,auto);
@@ -187,6 +195,38 @@ tr.rank2{background:#F5FAF6;}
 .bigscreen tr.rank2{background:rgba(255,255,255,0.05);}
 .bigscreen .match-row{border-bottom:1px solid #1D6B54;font-size:clamp(14px,1.8vw,19px);color:var(--shuttle-white);}
 .bigscreen .match-score{color:var(--gold);font-size:clamp(16px,2.2vw,24px);}
+.bs-heading{font-family:'Kanit',sans-serif;color:var(--shuttle-white);font-size:clamp(18px,2.6vw,26px);margin:0 0 12px;}
+.bs-day{
+  font-family:'Kanit',sans-serif;font-weight:700;color:var(--gold);
+  font-size:clamp(14px,1.7vw,19px);letter-spacing:0.5px;
+  margin:16px 0 6px;padding-bottom:5px;border-bottom:2px solid #2A7A5F;
+}
+.bs-day:first-child{margin-top:0;}
+.bs-sched-row{
+  display:flex;align-items:center;gap:clamp(12px,2vw,22px);
+  padding:clamp(9px,1.4vw,14px) 2px;border-bottom:1px solid #1D6B54;
+}
+.bs-sched-row:last-child{border-bottom:none;}
+.bs-time{
+  font-family:'Kanit',sans-serif;font-weight:800;color:var(--gold);
+  font-size:clamp(26px,4.4vw,46px);line-height:1;letter-spacing:1px;
+  flex:0 0 auto;min-width:clamp(76px,9vw,132px);
+  font-variant-numeric:tabular-nums;
+}
+.bs-time-unset{color:#6E9C8B;font-size:clamp(18px,2.6vw,30px);}
+.bs-sched-main{display:flex;flex-direction:column;gap:3px;flex:1;min-width:0;}
+.bs-teams{
+  font-family:'Kanit',sans-serif;font-weight:600;color:var(--shuttle-white);
+  font-size:clamp(17px,2.5vw,30px);line-height:1.15;
+}
+.bs-vs{color:#8FBFAE;font-weight:400;margin:0 clamp(6px,1vw,12px);font-size:0.75em;}
+.bs-winner{color:var(--gold);font-weight:800;}
+.bs-meta{color:#9FD8C4;font-size:clamp(12px,1.4vw,17px);}
+.bs-score{
+  font-family:'Kanit',sans-serif;font-weight:800;color:var(--gold);
+  font-size:clamp(18px,2.6vw,32px);white-space:nowrap;flex:0 0 auto;
+  font-variant-numeric:tabular-nums;
+}
 .bs-controls{display:flex;gap:8px;align-items:center;justify-content:center;margin-top:16px;flex-wrap:wrap;}
 .bs-dots{display:flex;gap:6px;}
 .bs-dots span{width:8px;height:8px;border-radius:50%;background:#2A5A48;}
@@ -1331,8 +1371,8 @@ function renderScheduleControls(m, loggedIn){
   }
   const dayLabel = (TOURNAMENT_DAYS.find(d=>d.value===dateVal)||{}).label || '';
   const dateCell = dayLabel ? `<span class="schedule-readonly">${dayLabel}</span>` : `<span></span>`;
-  const timeCell = timeVal ? `<span class="schedule-readonly">${esc(timeVal)}</span>` : `<span></span>`;
-  const courtCell = m.court ? `<span class="schedule-readonly">${esc(m.court)}</span>` : `<span></span>`;
+  const timeCell = timeVal ? `<span class="schedule-time">${esc(timeVal)}</span>` : `<span></span>`;
+  const courtCell = m.court ? `<span class="schedule-court">${esc(m.court)}</span>` : `<span></span>`;
   return dateCell + timeCell + courtCell;
 }
 
@@ -1695,8 +1735,8 @@ function getBigScreenPages(){
   const pages = [];
   cats.forEach(cat=>{
     if(cat.groups.length) pages.push({type:'groups-all', catId:cat.id});
-    pages.push({type:'live', catId:cat.id});
-    if(cat.matches.some(m=>m.scheduledAt)) pages.push({type:'schedule', catId:cat.id});
+    if(cat.matches.length) pages.push({type:'schedule', catId:cat.id});
+    if(cat.matches.some(m=>m.status==='done' && m.sets && m.sets.length)) pages.push({type:'results', catId:cat.id});
     if(cat.bracket && cat.bracket.generated) pages.push({type:'bracket', catId:cat.id});
   });
   return pages;
@@ -1731,7 +1771,7 @@ function renderBigScreen(){
   const cat = appState.categories.find(c=>c.id===page.catId);
   let body = '';
   if(page.type==='groups-all') body = renderBSAllGroups(cat);
-  else if(page.type==='live') body = renderBSLive(cat);
+  else if(page.type==='results') body = renderBSResults(cat);
   else if(page.type==='schedule') body = renderBSSchedule(cat);
   else if(page.type==='bracket') body = `<div style="overflow-x:auto;">${renderBracketSVG(cat, 'dark')}</div>`;
 
@@ -1773,46 +1813,66 @@ function renderBSAllGroups(cat){
   </div>`;
 }
 
+function bsDayLabel(dateStr){
+  const d = TOURNAMENT_DAYS.find(x=>x.value===dateStr);
+  return d ? d.label : dateStr;
+}
 function renderBSSchedule(cat){
-  const upcoming = cat.matches.filter(m=>m.scheduledAt && m.status!=='done')
-    .sort((a,b)=> new Date(a.scheduledAt) - new Date(b.scheduledAt)).slice(0,10);
-  return `
-  <h3 style="font-family:'Kanit',sans-serif;color:var(--shuttle-white);font-size:clamp(17px,2.4vw,22px);margin:0 0 10px;">กำหนดการแข่งขัน</h3>
-  ${upcoming.length===0 ? `<div class="empty" style="color:#CFE3DC;">ยังไม่มีคู่ที่กำหนดเวลาไว้</div>` :
-    upcoming.map(m=>`
-    <div class="match-row">
-      <span class="match-teams">
-        <span style="font-size:0.75em;color:var(--gold);display:block;">${formatScheduleDT(m.scheduledAt)}${m.court?' · '+esc(m.court):''} · ${matchLabel(m)}</span>
-        ${esc(m.team1Id?getTeamName(cat,m.team1Id):'รอผู้เข้ารอบ')}<span class="vs">vs</span>${esc(m.team2Id?getTeamName(cat,m.team2Id):'รอผู้เข้ารอบ')}
+  const notDone = cat.matches.filter(m=>m.status!=='done');
+  const scheduled = notDone.filter(m=>m.scheduledAt)
+    .sort((a,b)=> new Date(a.scheduledAt) - new Date(b.scheduledAt));
+  const unscheduled = notDone.filter(m=>!m.scheduledAt);
+  const shown = scheduled.concat(unscheduled).slice(0,8);
+  if(shown.length===0){
+    return `<h3 class="bs-heading">คิวการแข่งขัน</h3>
+      <div class="empty" style="color:#CFE3DC;">ไม่มีคู่ที่รอแข่งขันแล้ว</div>`;
+  }
+  let lastDay = null;
+  const rows = shown.map(m=>{
+    const day = m.scheduledAt ? m.scheduledAt.slice(0,10) : null;
+    let dayHeader = '';
+    if(day !== lastDay){
+      lastDay = day;
+      dayHeader = `<div class="bs-day">${day ? bsDayLabel(day) : 'ยังไม่กำหนดวันเวลา'}</div>`;
+    }
+    const time = m.scheduledAt ? m.scheduledAt.slice(11,16) : '--:--';
+    const t1 = m.team1Id ? getTeamName(cat,m.team1Id) : 'รอผู้เข้ารอบ';
+    const t2 = m.team2Id ? getTeamName(cat,m.team2Id) : 'รอผู้เข้ารอบ';
+    return `${dayHeader}
+    <div class="bs-sched-row">
+      <span class="bs-time ${m.scheduledAt?'':'bs-time-unset'}">${esc(time)}</span>
+      <span class="bs-sched-main">
+        <span class="bs-teams">${esc(t1)}<span class="bs-vs">vs</span>${esc(t2)}</span>
+        <span class="bs-meta">${matchLabel(m)}${m.court?' · '+esc(m.court):''}</span>
       </span>
-      ${statusBadge(m)}
-    </div>`).join('')
-  }`;
+    </div>`;
+  }).join('');
+  return `<h3 class="bs-heading">คิวการแข่งขัน</h3>${rows}`;
+}
+function renderBSResults(cat){
+  const recent = cat.matches
+    .filter(m=>m.status==='done' && m.sets && m.sets.length)
+    .sort((a,b)=>(b.doneAt||0)-(a.doneAt||0)).slice(0,7);
+  if(recent.length===0){
+    return `<h3 class="bs-heading">ผลล่าสุด</h3>
+      <div class="empty" style="color:#CFE3DC;">ยังไม่มีผลการแข่งขัน</div>`;
+  }
+  return `<h3 class="bs-heading">ผลล่าสุด</h3>` + recent.map(m=>{
+    const t1 = getTeamName(cat,m.team1Id), t2 = getTeamName(cat,m.team2Id);
+    const score = (m.sets||[]).map(s=>`${s.a}-${s.b}`).join('  ');
+    return `
+    <div class="bs-sched-row">
+      <span class="bs-sched-main">
+        <span class="bs-teams">
+          <span class="${m.winnerId===m.team1Id?'bs-winner':''}">${esc(t1)}</span><span class="bs-vs">vs</span><span class="${m.winnerId===m.team2Id?'bs-winner':''}">${esc(t2)}</span>
+        </span>
+        <span class="bs-meta">${matchLabel(m)}${m.court?' · '+esc(m.court):''}</span>
+      </span>
+      <span class="bs-score">${esc(score)}</span>
+    </div>`;
+  }).join('');
 }
 
-function renderBSLive(cat){
-  const all = cat.matches;
-  const ongoing = all.filter(m=>m.status==='ongoing');
-  const pending = all.filter(m=>m.status==='pending' && m.team1Id && m.team2Id).slice(0,8);
-  const recent = all.filter(m=>m.status==='done').sort((a,b)=>(b.doneAt||0)-(a.doneAt||0)).slice(0,6);
-  return `
-  <h3 style="font-family:'Kanit',sans-serif;color:var(--shuttle-white);font-size:clamp(17px,2.4vw,22px);margin:0 0 10px;">กำลังแข่ง / รอแข่ง</h3>
-  ${ongoing.concat(pending).length===0 ? `<div class="empty" style="color:#CFE3DC;">ไม่มีคู่ที่รอแข่งขัน</div>` :
-    ongoing.concat(pending).map(m=>`
-    <div class="match-row">
-      <span class="match-teams">${esc(getTeamName(cat,m.team1Id))}<span class="vs">vs</span>${esc(getTeamName(cat,m.team2Id))}</span>
-      ${statusBadge(m)}
-    </div>`).join('')
-  }
-  <h3 style="font-family:'Kanit',sans-serif;color:var(--shuttle-white);font-size:clamp(17px,2.4vw,22px);margin:16px 0 10px;">ผลล่าสุด</h3>
-  ${recent.length===0 ? `<div class="empty" style="color:#CFE3DC;">ยังไม่มีผลการแข่งขัน</div>` :
-    recent.map(m=>`
-    <div class="match-row">
-      <span class="match-teams">${esc(getTeamName(cat,m.team1Id))}<span class="vs">vs</span>${esc(getTeamName(cat,m.team2Id))}</span>
-      <span class="match-score">${(m.sets||[]).map(s=>`${s.a}-${s.b}`).join(', ')}</span>
-    </div>`).join('')
-  }`;
-}
 
 /* ---------- init ---------- */
 (async function init(){
